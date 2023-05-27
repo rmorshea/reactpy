@@ -10,11 +10,13 @@ import React, {
   ChangeEvent,
 } from "react";
 // @ts-ignore
-import { set as setJsonPointer } from "json-pointer";
+import { get as getJsonPointer } from "json-pointer";
+import logger from "./logger";
 import {
   ReactPyVdom,
   ReactPyComponent,
-  createChildren,
+  createChildrenFromVdom,
+  createChildrenFromArray,
   createAttributes,
   loadImportSource,
   ImportSourceBinding,
@@ -30,12 +32,17 @@ export function Layout(props: { client: ReactPyClient }): JSX.Element {
   useEffect(
     () =>
       props.client.onMessage("layout-update", ({ path, model }) => {
+        // we must copy because we mutate the model (i.e. ReactPyVdom.updateModel)
+        const modelCopy = structuredClone(model);
         if (path === "") {
-          Object.assign(currentModel, model);
+          Object.assign(currentModel, modelCopy);
+          forceUpdate();
         } else {
-          setJsonPointer(currentModel, path, model);
+          const oldModel: ReactPyVdom = getJsonPointer(currentModel, path);
+          oldModel.updateModel
+            ? oldModel.updateModel(modelCopy)
+            : logger.error("No updateModel function on model", oldModel);
         }
-        forceUpdate();
       }),
     [currentModel, props.client],
   );
@@ -47,7 +54,36 @@ export function Layout(props: { client: ReactPyClient }): JSX.Element {
   );
 }
 
+export function InnerLayout(props: {
+  client: ReactPyClient;
+  children: ReactPyVdom[];
+}): JSX.Element {
+  return (
+    <ClientContext.Provider value={props.client}>
+      {createChildrenFromArray(props.children, (child) => (
+        <Element model={child} key={child.key} />
+      ))}
+    </ClientContext.Provider>
+  );
+}
+
 export function Element({ model }: { model: ReactPyVdom }): JSX.Element | null {
+  const forceUpdate = useForceUpdate();
+
+  useEffect(() => {
+    const updateCallback = (newModel: ReactPyVdom) => {
+      // We mutate the model to avoid keeping the old version in memory
+      Object.assign(model, newModel);
+      forceUpdate();
+    };
+    model.updateModel = updateCallback;
+    return () => {
+      if (model.updateModel === updateCallback) {
+        delete model.updateModel;
+      }
+    };
+  });
+
   if (model.error !== undefined) {
     if (model.error) {
       return <pre>{model.error}</pre>;
@@ -77,7 +113,7 @@ function StandardElement({ model }: { model: ReactPyVdom }) {
   return createElement(
     model.tagName === "" ? Fragment : model.tagName,
     createAttributes(model, client),
-    ...createChildren(model, (child) => {
+    ...createChildrenFromVdom(model, (child) => {
       return <Element model={child} key={child.key} />;
     }),
   );
@@ -108,7 +144,7 @@ function UserInputElement({ model }: { model: ReactPyVdom }): JSX.Element {
     model.tagName,
     // overwrite
     { ...props, value },
-    ...createChildren(model, (child) => (
+    ...createChildrenFromVdom(model, (child) => (
       <Element model={child} key={child.key} />
     )),
   );

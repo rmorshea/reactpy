@@ -19,10 +19,7 @@ export async function loadImportSource(
   }
 
   return (node: HTMLElement) => {
-    const binding = module.bind(node, {
-      sendMessage: client.sendMessage,
-      onMessage: client.onMessage,
-    });
+    const binding = module.bind(node, client);
     if (
       !(
         typeof binding.create === "function" &&
@@ -85,7 +82,7 @@ function createImportSourceElement(props: {
   return props.binding.create(
     type,
     createAttributes(props.model, props.client),
-    createChildren(props.model, (child) =>
+    createChildrenFromVdom(props.model, (child) =>
       createImportSourceElement({
         ...props,
         model: child,
@@ -111,22 +108,27 @@ function stringifyImportSource(importSource: ReactPyVdomImportSource) {
   });
 }
 
-export function createChildren<Child>(
+export function createChildrenFromVdom<Child>(
   model: ReactPyVdom,
   createChild: (child: ReactPyVdom) => Child,
 ): (Child | string)[] {
-  if (!model.children) {
-    return [];
-  } else {
-    return model.children.map((child) => {
-      switch (typeof child) {
-        case "object":
-          return createChild(child);
-        case "string":
-          return child;
-      }
-    });
-  }
+  return model.children
+    ? createChildrenFromArray(model.children, createChild)
+    : [];
+}
+
+export function createChildrenFromArray<Child>(
+  models: ReactPyVdomChild[],
+  createChild: (child: ReactPyVdom) => Child,
+): (Child | string)[] {
+  return models.map((child) => {
+    switch (typeof child) {
+      case "object":
+        return createChild(child);
+      case "string":
+        return child;
+    }
+  });
 }
 
 export function createAttributes(
@@ -210,11 +212,16 @@ export type ReactPyVdom = {
   tagName: string;
   key?: string;
   attributes?: { [key: string]: string };
-  children?: (ReactPyVdom | string)[];
+  children?: ReactPyVdomChild[];
   error?: string;
   eventHandlers?: { [key: string]: ReactPyVdomEventHandler };
   importSource?: ReactPyVdomImportSource;
+  // This is injected into the model by the client while rendering.
+  // It is used to update the model when the server sends an update.
+  updateModel?: (model: ReactPyVdom) => void;
 };
+
+export type ReactPyVdomChild = ReactPyVdom | string;
 
 export type ReactPyVdomEventHandler = {
   target: string;
@@ -230,23 +237,11 @@ export type ReactPyVdomImportSource = {
 };
 
 export type ReactPyModule = {
-  bind: (
-    node: HTMLElement,
-    context: ReactPyModuleBindingContext,
-  ) => ReactPyModuleBinding;
+  bind: (node: HTMLElement, client: ReactPyClient) => ReactPyModuleBinding;
 } & { [key: string]: any };
 
-export type ReactPyModuleBindingContext = {
-  sendMessage: ReactPyClient["sendMessage"];
-  onMessage: ReactPyClient["onMessage"];
-};
-
 export type ReactPyModuleBinding = {
-  create: (
-    type: any,
-    props?: any,
-    children?: (any | string | ReactPyVdom)[],
-  ) => any;
+  create: (type: any, props?: any, children?: (string | ReactPyVdom)[]) => any;
   render: (element: any) => void;
   unmount: () => void;
 };
